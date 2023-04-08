@@ -25,11 +25,7 @@ class Concept(BaseModel):
     save_sample_prompt: str = ""
     save_sample_template: str = ""
 
-    def __init__(
-            self,
-            input_dict: Union[Dict, None] = None,
-            **kwargs
-    ):
+    def __init__(self, input_dict: Union[Dict, None] = None, **kwargs):
         super().__init__(**kwargs)
         if input_dict is not None:
             self.load_params(input_dict)
@@ -44,7 +40,7 @@ class Concept(BaseModel):
         for key, value in params_dict.items():
             if hasattr(self, key):
                 setattr(self, key, value)
-        if self.instance_data_dir:
-            self.is_valid = os.path.isdir(self.instance_data_dir)
-            if not self.is_valid:
-                print(f"Invalid Dataset Directory: {self.instance_data_dir}")
+            if self.instance_data_dir:
+                self.is_valid = os.path.isdir(self.instance_data_dir)
+            else:
+                self.is_valid = False

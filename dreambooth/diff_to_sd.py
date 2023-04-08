@@ -2,7 +2,6 @@
 # *Only* converts the UNet, VAE, and Text Encoder.
 # Does not convert optimizer state or any other thing.
 import copy
-import logging
 import os
 import os.path as osp
 import re
@@ -15,17 +14,25 @@ import torch
 from diffusers import UNet2DConditionModel
 from torch import Tensor, nn
 
-from dreambooth import shared as shared
-from dreambooth.dataclasses.db_config import from_file, DreamboothConfig
-from dreambooth.shared import status
-from dreambooth.utils.model_utils import unload_system_models, \
-    reload_system_models, \
-    disable_safe_unpickle, enable_safe_unpickle, import_model_class_from_model_name_or_path
-from dreambooth.utils.utils import printi
-from helpers.mytqdm import mytqdm
-from lora_diffusion.lora import merge_lora_to_model
-
-logger = logging.getLogger(__name__)
+try:
+    from extensions.sd_dreambooth_extension.dreambooth import shared as shared
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.db_config import from_file
+    from extensions.sd_dreambooth_extension.dreambooth.shared import status
+    from extensions.sd_dreambooth_extension.dreambooth.utils.model_utils import unload_system_models, \
+        reload_system_models, \
+        disable_safe_unpickle, enable_safe_unpickle, import_model_class_from_model_name_or_path
+    from extensions.sd_dreambooth_extension.dreambooth.utils.utils import printi
+    from extensions.sd_dreambooth_extension.helpers.mytqdm import mytqdm
+    from extensions.sd_dreambooth_extension.lora_diffusion.lora import merge_lora_to_model
+except:
+    from dreambooth.dreambooth import shared as shared  # noqa
+    from dreambooth.dreambooth.dataclasses.db_config import from_file  # noqa
+    from dreambooth.dreambooth.shared import status  # noqa
+    from dreambooth.dreambooth.utils.model_utils import unload_system_models, reload_system_models, \
+        disable_safe_unpickle, enable_safe_unpickle, import_model_class_from_model_name_or_path  # noqa
+    from dreambooth.dreambooth.utils.utils import printi  # noqa
+    from dreambooth.helpers.mytqdm import mytqdm  # noqa
+    from dreambooth.lora_diffusion.lora import merge_lora_to_model  # noqa
 
 unet_conversion_map = [
     # (stable-diffusion, HF Diffusers)
@@ -250,7 +257,7 @@ def check_weight_type(k: str) -> str:
     return "other"
 
 
-def split_dict(state_dict, pbar: mytqdm = None):
+def split_dict(state_dict):
     ok = {}
     json_dict = {}
 
@@ -263,16 +270,12 @@ def split_dict(state_dict, pbar: mytqdm = None):
             if isinstance(t, str):
                 json_dict[wk] = t
             if isinstance(t, Dict):
-                moar_ok, moar_json = split_dict(t, pbar)
+                moar_ok, moar_json = split_dict(t)
                 ok.update(moar_ok)
                 json_dict.update(moar_json)
-    if pbar:
-        for k, v in state_dict.items():
-            _hf(k, v)
-        pbar.update()
-    else:
-        for k, v in mytqdm(state_dict.items(), desc="Compiling checkpoint", position=1):
-            _hf(k, v)
+
+    for k, v in mytqdm(state_dict.items()):
+        _hf(k, v)
 
     return ok, json_dict
 
@@ -324,7 +327,7 @@ def convert_text_enc_state_dict(text_enc_dict: Dict[str, torch.Tensor]):
 
 
 def get_model_path(working_dir: str, model_name: str = "", file_extra: str = ""):
-    model_base = osp.join(working_dir, model_name) if model_name else working_dir
+    model_base = osp.join(working_dir, model_name) if model_name != "" else working_dir
     if os.path.exists(model_base) and os.path.isdir(model_base):
         file_name_regex = re.compile(f"model_?{file_extra}\\.(safetensors|bin)$")
         for f in os.listdir(model_base):
@@ -335,35 +338,15 @@ def get_model_path(working_dir: str, model_name: str = "", file_extra: str = "")
     return None
 
 
-def copy_diffusion_model(model_name: str, dst_dir: str):
-    model = from_file(model_name)
-    if model is not None:
-        src_dir = model.pretrained_model_name_or_path
-        logger.debug(f"Exporting: {src_dir}")
-        if not os.path.exists(dst_dir):
-            os.makedirs(dst_dir)
-        src_yaml = os.path.basename(os.path.join(src_dir, "..", f"{model_name}.yaml"))
-        if os.path.exists(src_yaml):
-            shutil.copyfile(src_yaml, dst_dir)
-        for item in os.listdir(src_dir):
-            src_path = os.path.join(src_dir, item)
-            dst_path = os.path.join(dst_dir, item)
-            if os.path.isdir(src_path):
-                shutil.copytree(src_path, dst_path)
-            else:
-                shutil.copy2(src_path, dst_path)
-
-
-def compile_checkpoint(model_name: str, lora_file_name: str = None, reload_models: bool = True, log: bool = True,
-                       snap_rev: str = "", pbar: mytqdm = None):
+def compile_checkpoint(model_name: str, lora_path: str = None, reload_models: bool = True, log: bool = True,
+                       snap_rev: str = ""):
     """
 
     @param model_name: The model name to compile
     @param reload_models: Whether to reload the system list of checkpoints.
-    @param lora_file_name: The path to a lora pt file to merge with the unet. Auto set during training.
+    @param lora_path: The path to a lora pt file to merge with the unet. Auto set during training.
     @param log: Whether to print messages to console/UI.
     @param snap_rev: The revision of snapshot to load from
-    @param pbar: progress bar
     @return: status: What happened, path: Checkpoint path
     """
     unload_system_models()
@@ -372,8 +355,8 @@ def compile_checkpoint(model_name: str, lora_file_name: str = None, reload_model
     status.job_count = 7
 
     config = from_file(model_name)
-    if lora_file_name is None and config.lora_model_name:
-        lora_file_name = config.lora_model_name
+    if lora_path is None and config.lora_model_name:
+        lora_path = config.lora_model_name
     save_model_name = model_name if config.custom_model_name == "" else config.custom_model_name
     if config.custom_model_name == "":
         printi(f"Compiling checkpoint for {model_name}...", log=log)
@@ -403,7 +386,7 @@ def compile_checkpoint(model_name: str, lora_file_name: str = None, reload_model
     model_path = config.pretrained_model_name_or_path
 
     new_hotness = os.path.join(config.model_dir, "checkpoints", f"checkpoint-{snap_rev}")
-    if snap_rev and os.path.exists(new_hotness) and os.path.isdir(new_hotness):
+    if snap_rev != "" and os.path.exists(new_hotness) and os.path.isdir(new_hotness):
         mytqdm.write(f"Loading snapshot paths from {new_hotness}")
         unet_path = get_model_path(new_hotness)
         text_enc_path = get_model_path(new_hotness, file_extra="1")
@@ -435,9 +418,10 @@ def compile_checkpoint(model_name: str, lora_file_name: str = None, reload_model
                 pass
 
         # Apply LoRA to the unet
-        if lora_file_name:
+        if lora_path is not None and lora_path != "":
             unet_model = UNet2DConditionModel().from_pretrained(os.path.dirname(unet_path))
-            lora_rev = apply_lora(config, unet_model, lora_file_name, "cpu", False)
+            lora_rev = apply_lora(unet_model, lora_path, config.lora_unet_rank, config.lora_weight, "cpu", False,
+                                  config.use_lora_extended)
             unet_state_dict = copy.deepcopy(unet_model.state_dict())
             del unet_model
             if lora_rev is not None:
@@ -464,9 +448,9 @@ def compile_checkpoint(model_name: str, lora_file_name: str = None, reload_model
         printi("Converting text encoder...", log=log)
 
         # Apply lora weights to the tenc
-        if lora_file_name:
-            lora_paths = lora_file_name.split(".")
-            lora_txt_file_name = f"{lora_paths[0]}_txt.{lora_paths[1]}"
+        if lora_path is not None and lora_path != "":
+            lora_paths = lora_path.split(".")
+            lora_txt_path = f"{lora_paths[0]}_txt.{lora_paths[1]}"
             text_encoder_cls = import_model_class_from_model_name_or_path(config.pretrained_model_name_or_path,
                                                                           config.revision)
 
@@ -477,7 +461,8 @@ def compile_checkpoint(model_name: str, lora_file_name: str = None, reload_model
                 torch_dtype=torch.float32
             )
 
-            apply_lora(config, text_encoder, lora_txt_file_name, "cpu", True)
+            apply_lora(text_encoder, lora_txt_path, config.lora_txt_rank, config.lora_txt_weight, "cpu", True,
+                       config.use_lora_extended)
             text_enc_dict = copy.deepcopy(text_encoder.state_dict())
             del text_encoder
         else:
@@ -504,7 +489,7 @@ def compile_checkpoint(model_name: str, lora_file_name: str = None, reload_model
         state_dict = {"db_global_step": config.revision, "db_epoch": config.epoch, "state_dict": state_dict}
         printi(f"Saving checkpoint to {checkpoint_path}...", log=log)
         if save_safetensors:
-            safe_dict, json_dict = split_dict(state_dict, pbar)
+            safe_dict, json_dict = split_dict(state_dict)
             safetensors.torch.save_file(safe_dict, checkpoint_path, json_dict)
         else:
             torch.save(state_dict, checkpoint_path)
@@ -566,15 +551,20 @@ def load_model(model_path: str, map_location: str):
         return loaded
 
 
-def apply_lora(config: DreamboothConfig, model: nn.Module, lora_file_name: str, device: str, is_tenc: bool):
+def apply_lora(model: nn.Module, loras: str, rank: int, weight: float, device: str, is_tenc: bool, use_extended: bool):
     lora_rev = None
-    if lora_file_name:
-        if not os.path.exists(lora_file_name):
-            lora_file_name = os.path.join(config.model_dir, "loras", lora_file_name)
-        if os.path.exists(lora_file_name):
-            lora_rev = lora_file_name.split("_")[-1].replace(".pt", "")
-            printi(f"Loading lora from {lora_file_name}", log=True)
-            merge_lora_to_model(model, load_model(lora_file_name, device), is_tenc, config.use_lora_extended,
-                                config.lora_unet_rank, config.lora_weight)
+    if loras is not None and loras != "":
+        if not os.path.exists(loras):
+            try:
+                cmd_lora_models_path = shared.lora_models_path
+            except:
+                cmd_lora_models_path = None
+            model_dir = os.path.dirname(cmd_lora_models_path) if cmd_lora_models_path else shared.models_path
+            loras = os.path.join(model_dir, "lora", loras)
+
+        if os.path.exists(loras):
+            lora_rev = loras.split("_")[-1].replace(".pt", "")
+            printi(f"Loading lora from {loras}", log=True)
+            merge_lora_to_model(model, load_model(loras, device), is_tenc, use_extended, rank, weight)
 
     return lora_rev

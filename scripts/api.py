@@ -22,20 +22,30 @@ from starlette import status
 from starlette.requests import Request
 
 try:
-    from dreambooth import shared
-    from dreambooth.dataclasses.db_concept import Concept
-    from dreambooth.dataclasses.db_config import from_file, DreamboothConfig
-    from dreambooth.diff_to_sd import compile_checkpoint
-    from dreambooth.secret import get_secret
-    from dreambooth.shared import DreamState
-    from dreambooth.ui_functions import create_model, generate_samples, \
+    from extensions.sd_dreambooth_extension.dreambooth import shared
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.db_concept import Concept
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.db_config import from_file, DreamboothConfig
+    from extensions.sd_dreambooth_extension.dreambooth.diff_to_sd import compile_checkpoint
+    from extensions.sd_dreambooth_extension.dreambooth.secret import get_secret
+    from extensions.sd_dreambooth_extension.dreambooth.shared import DreamState
+    from extensions.sd_dreambooth_extension.dreambooth.ui_functions import create_model, generate_samples, \
         start_training
-    from dreambooth.utils.gen_utils import generate_classifiers
-    from dreambooth.utils.image_utils import get_images
-    from dreambooth.utils.model_utils import get_db_models, get_lora_models
+    from extensions.sd_dreambooth_extension.dreambooth.utils.gen_utils import generate_classifiers
+    from extensions.sd_dreambooth_extension.dreambooth.utils.image_utils import get_images
+    from extensions.sd_dreambooth_extension.dreambooth.utils.model_utils import get_db_models, get_lora_models
 except:
-    print("Exception importing api")
-    traceback.print_exc()
+    from dreambooth.dreambooth import shared  # noqa
+    from dreambooth.dreambooth.dataclasses.db_concept import Concept  # noqa
+    from dreambooth.dreambooth.dataclasses.db_config import from_file, DreamboothConfig  # noqa
+    from dreambooth.dreambooth.diff_to_sd import compile_checkpoint  # noqa
+    from dreambooth.dreambooth.secret import get_secret  # noqa
+    from dreambooth.dreambooth.shared import DreamState  # noqa
+    from dreambooth.dreambooth.ui_functions import create_model, generate_samples, start_training  # noqa
+    from dreambooth.dreambooth.utils.gen_utils import generate_classifiers  # noqa
+    from dreambooth.dreambooth.utils.image_utils import get_images  # noqa
+    from dreambooth.dreambooth.utils.model_utils import get_db_models, get_lora_models  # noqa
+
+    pass
 
 if os.environ.get("DEBUG_API", False):
     logging.basicConfig(level=logging.DEBUG)
@@ -123,8 +133,8 @@ def zip_files(db_model_name, files, name_part=""):
 
 def check_api_key(key):
     current_key = get_secret()
-    if current_key is not None and current_key:
-        if not key:
+    if current_key is not None and current_key != "":
+        if key is None or key == "":
             return JSONResponse(status_code=401, content={"message": "API Key Required."})
         if key != current_key:
             return JSONResponse(status_code=403, content={"message": "Invalid API Key."})
@@ -146,7 +156,6 @@ def file_to_base64(file_path) -> str:
 
 
 def dreambooth_api(_, app: FastAPI):
-    logger.debug("Loading Dreambooth API Endpoints.")
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         return JSONResponse(
@@ -182,7 +191,7 @@ def dreambooth_api(_, app: FastAPI):
         key_check = check_api_key(api_key)
         if key_check is not None:
             return key_check
-        if not model_name:
+        if model_name is None or model_name == "":
             return JSONResponse(status_code=422, content={"message": "Invalid model name."})
         config = from_file(model_name)
         if config is None:
@@ -223,6 +232,7 @@ def dreambooth_api(_, app: FastAPI):
             active = True
             ckpt_result = compile_checkpoint(model_name, reload_models=False, log=False)
             active = False
+            shared.status.end()
             if "Checkpoint compiled successfully" in ckpt_result:
                 path = ckpt_result.replace("Checkpoint compiled successfully:", "").strip()
                 logger.debug(f"Checkpoint aved to path: {path}")
@@ -260,7 +270,7 @@ def dreambooth_api(_, app: FastAPI):
     @app.post("/dreambooth/classifiers")
     async def generate_classes(
             model_name: str = Form(description="The model name to generate classifiers for."),
-            class_gen_method: str = Form("Native Diffusers", description="Image Generation Library."),
+            use_txt2img: bool = Form("", description="Use Txt2Image to generate classifiers."),
             api_key: str = Form("", description="If an API key is set, this must be present.")
     ):
         """
@@ -269,7 +279,7 @@ def dreambooth_api(_, app: FastAPI):
         key_check = check_api_key(api_key)
         if key_check is not None:
             return key_check
-        if not model_name:
+        if model_name is None or model_name == "":
             return JSONResponse(status_code=422, content={"message": "Invalid model name."})
         config = from_file(model_name)
         if config is None:
@@ -284,7 +294,7 @@ def dreambooth_api(_, app: FastAPI):
         run_in_background(
             generate_classifiers,
             config,
-            class_gen_method
+            use_txt2img
         )
         active = False
         return JSONResponse(content={"message": "Generating classifiers..."})
@@ -348,13 +358,13 @@ def dreambooth_api(_, app: FastAPI):
         key_check = check_api_key(api_key)
         if key_check is not None:
             return key_check
-        if not model_name:
+        if model_name is None or model_name == "":
             return JSONResponse(status_code=422, content={"message": "Invalid model name."})
         config = from_file(model_name)
         if config is None:
             return JSONResponse(status_code=422, content={"message": "Invalid config."})
         new_concepts = []
-        if concept is None and instance_dir:
+        if concept is None and instance_dir != "":
             new_concept = Concept()
             new_concept.instance_data_dir = instance_dir
             new_concept.instance_token = instance_token
@@ -389,7 +399,7 @@ def dreambooth_api(_, app: FastAPI):
         key_check = check_api_key(api_key)
         if key_check is not None:
             return key_check
-        if not model_name:
+        if model_name is None or model_name == "":
             return JSONResponse(status_code=422, content={"message": "Invalid model name."})
         config = from_file(model_name)
         if config is None:
@@ -409,7 +419,7 @@ def dreambooth_api(_, app: FastAPI):
         key_check = check_api_key(api_key)
         if key_check is not None:
             return key_check
-        if not model_name:
+        if model_name is None or model_name == "":
             return JSONResponse(status_code=422, content={"message": "Invalid model name."})
         config = from_file(model_name)
         if config is None:
@@ -444,7 +454,7 @@ def dreambooth_api(_, app: FastAPI):
         if key_check is not None:
             return key_check
 
-        if not new_model_name:
+        if new_model_name is None or new_model_name == "":
             return JSONResponse(status_code=422, content={"message": "Invalid model name."})
 
         status = is_running()
@@ -471,33 +481,13 @@ def dreambooth_api(_, app: FastAPI):
         key_check = check_api_key(api_key)
         if key_check is not None:
             return key_check
-        if not model_name:
+        if model_name is None or model_name == "":
             return JSONResponse(status_code=422, content={"message": "Invalid model name."})
         config = from_file(model_name)
         if config is None:
             return JSONResponse(status_code=422, content={"message": "Invalid config."})
         model_dir = config.model_dir
-        models_path = os.path.join(shared.models_path, "stable-diffusion")
-        model_base = config.custom_model_name if config.custom_model_name else config.model_name
-        if config.use_subdir:
-            models_path = os.path.join(models_path, model_base)
-
-        model_files = os.listdir(models_path)
-        for mf in model_files:
-            rev = mf.split("_")[-1]
-            try:
-                revision = int(rev)
-                if mf == f"{model_base}_{revision}.safetensors":
-                    full_file = os.path.join(models_path, mf)
-                    print(f"Removing model: {full_file}")
-                    os.remove(full_file)
-            except:
-                pass
-        try:
-            shutil.rmtree(model_dir,True)
-        except:
-            pass
-
+        shutil.rmtree(model_dir, True)
         return JSONResponse(f"Model {model_name} has been deleted.")
 
     @app.get("/dreambooth/model_config")
@@ -587,13 +577,11 @@ def dreambooth_api(_, app: FastAPI):
     @app.get("/dreambooth/models_lora")
     async def get_models_lora(
             api_key: str = Query("", description="If an API key is set, this must be present."),
-            model_name: str = Query(description="The model name to query for lora files."),
     ) -> JSONResponse:
         """
 
         Args:
             api_key: API Key.
-            model_name: The model name to query for lora files.
 
         Returns: A list of LoRA Models.
 
@@ -601,12 +589,7 @@ def dreambooth_api(_, app: FastAPI):
         key_check = check_api_key(api_key)
         if key_check is not None:
             return key_check
-
-        config = from_file(model_name)
-        if model_name and config is None:
-            return JSONResponse("Config not found")
-
-        models = get_lora_models(config)
+        models = get_lora_models()
         return JSONResponse(models)
 
     @app.get("/dreambooth/samples")
@@ -622,8 +605,7 @@ def dreambooth_api(_, app: FastAPI):
             seed: int = Query(-1, description="The seed to use when generating samples"),
             steps: int = Query(60, description="Number of sampling steps to use when generating images."),
             scale: float = Query(7.5, description="CFG scale to use when generating images."),
-            class_gen_method: str = Query("Native Diffusers", description="Image Generation Library."),
-            scheduler: str = Query("DEISMultistep", description="Sampler to use if not using txt2img"),
+            use_txt2img: bool = Query(True, description="Use txt2img to generate samples"),
             api_key: str = Query("", description="If an API key is set, this must be present.", )
     ):
         """
@@ -654,9 +636,10 @@ def dreambooth_api(_, app: FastAPI):
             seed=seed,
             scale=scale,
             steps=steps,
-            class_gen_method=class_gen_method,
-            scheduler=scheduler
+            use_txt2img=use_txt2img
         )
+
+        shared.status.end()
 
         if len(images) > 1:
             return zip_files(model_name, images, "_sample")
@@ -929,5 +912,4 @@ try:
     script_callbacks.on_app_started(dreambooth_api)
     logger.debug("SD-Webui API layer loaded")
 except:
-    logger.debug("Unable to import script callbacks.")
     pass

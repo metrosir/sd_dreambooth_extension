@@ -1,7 +1,10 @@
 import random
 from typing import Tuple
 
-from dreambooth.dataset.db_dataset import DbDataset
+try:
+    from extensions.sd_dreambooth_extension.dreambooth.dataset.db_dataset import DbDataset
+except:
+    from dreambooth.dreambooth.dataset.db_dataset import DbDataset  # noqa
 
 
 class BucketSampler:

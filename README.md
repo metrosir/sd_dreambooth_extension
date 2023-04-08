@@ -47,9 +47,10 @@ Stable-diffusion-webui, not just reload it.
 
 ## Several Tutorial Videos For Dreambooth
 
-[![Zero To Hero Stable Diffusion DreamBooth Tutorial By Using Automatic1111 Web UI - Ultra Detailed](https://i.imgur.com/zzavDGW.png)](https://youtu.be/Bdl-jWR3Ukc) [![How to Inject Your Trained Subject e.g. Your Face Into Any Custom Stable Diffusion Model By Web UI](https://i.imgur.com/gPGWr3S.png)](https://youtu.be/s25hcW4zq4M)
-[![8 GB LoRA Training - Fix CUDA Version For DreamBooth and Textual Inversion Training By Automatic1111](https://i.imgur.com/leOwdWy.png)](https://youtu.be/O01BrQwOd-Q) [![Automatic1111 Stable Diffusion DreamBooth Guide: Optimal Classification Images Count Comparison Test](https://i.imgur.com/kp10x2p.png)](https://youtu.be/Tb4IYIYm4os)
-[![Epic Web UI DreamBooth Update - New Best Settings - 10 Stable Diffusion Training Compared on RunPods](https://i.imgur.com/i5FmRcu.png)](https://youtu.be/sRdtVanSRl4) [![How To Install New DREAMBOOTH & Torch 2 On Automatic1111 Web UI PC For Epic Performance Gains Guide](https://i.imgur.com/oFL7TyX.png)](https://youtu.be/pom3nQejaTs)
+[![Zero To Hero Stable Diffusion DreamBooth Tutorial By Using Automatic1111 Web UI - Ultra Detailed](https://i.imgur.com/zzavDGW.png)](https://youtu.be/Bdl-jWR3Ukc)
+[![DreamBooth Got Buffed - 22 January Update - Much Better Success Train Stable Diffusion Models Web UI](https://i.imgur.com/TtJKKOn.png)](https://youtu.be/KwxNcGhHuLY)
+[![How to Inject Your Trained Subject e.g. Your Face Into Any Custom Stable Diffusion Model By Web UI](https://i.imgur.com/gPGWr3S.png)](https://youtu.be/s25hcW4zq4M)
+[![8 GB LoRA Training - Fix CUDA Version For DreamBooth and Textual Inversion Training By Automatic1111](https://i.imgur.com/leOwdWy.png)](https://youtu.be/O01BrQwOd-Q)
 
 ## Usage
 
@@ -187,11 +188,13 @@ Also, you *cannot* use 8Bit-Adam with CPU Training, or you'll have a bad time.
 *Use EMA* - Use estimated moving averages when training the unet. Purportedly, this is better for generating images, but
 seems to have a minimal effect on training results. Uses more VRAM.
 
-*Mixed Precision* - When using 8bit AdamW, you *must* set this to fp16 or bf16. Bf16 precision is only supported by newer
+*Use 8Bit Adam* - Enable this to save VRAM. Should now work on both windows and Linux without needing WSL.
+
+*Mixed Precision* - When using 8Bit Adam, you *must* set this to fp16 or bf16. Bf16 precision is only supported by newer
 GPUs, and enabled/disabled by default.
 
 *Memory Attention* - Type of attention to use. Choices are: 'default': usually fastest, but use most VRAM; 'xformers':
-slower, uses less VRAM, can only be used with *Mixed Precision* = 'fp16' (no impact on Apple Silicon); 'flash_attention': slowest, requires lowest
+slower, uses less VRAM, can only be used with *Mixed Precision* = 'fp16'; 'flash_attention': slowest, requires lowest
 VRAM.
 
 *Don't Cache Latents* - Why is this not just called "cache" latents? Because that's what the original script uses, and
@@ -344,8 +347,6 @@ they'll help me help you faster.
 
 [Feature Request](https://github.com/d8ahazard/sd_dreambooth_extension/issues/new?assignees=&labels=&template=feature_request.md&title=)
 
-[Discord](https://discord.gg/q8dtpfRD5w)
-
 # Credits
 
 [Huggingface.co](https://huggingface.co) - All the things
@@ -358,3 +359,4 @@ optimizations.
 [Bmalthais](https://github.com/bmaltais/kohya_ss) - Optimizations, Features
 
 [Automatic1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) - Base app
+

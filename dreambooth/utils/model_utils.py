@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import collections
 import os
-import re
 
-import torch
-from diffusers.utils import is_xformers_available
 from transformers import PretrainedConfig
 
-from dreambooth import shared  # noqa
-from dreambooth.dataclasses.db_config import DreamboothConfig  # noqa
-from dreambooth.utils.utils import cleanup  # noqa
+try:
+    from extensions.sd_dreambooth_extension.dreambooth import shared  # noqa
+    from extensions.sd_dreambooth_extension.dreambooth.utils.utils import cleanup  # noqa
+except:
+    from dreambooth.dreambooth import shared  # noqa
+    from dreambooth.dreambooth.utils.utils import cleanup  # noqa
 
 checkpoints_list = {}
 checkpoint_alisases = {}
@@ -47,12 +47,12 @@ class CheckpointInfo:
         else:
             name = os.path.basename(filename)
 
-        if name.startswith(os.sep) or name.startswith(os.sep):
+        if name.startswith("\\") or name.startswith("/"):
             name = name[1:]
 
         self.name = name
         self.name_for_extra = os.path.splitext(os.path.basename(filename))[0]
-        self.model_name = os.path.splitext(name.replace(os.sep, "_"))[0]
+        self.model_name = os.path.splitext(name.replace("/", "_").replace("\\", "_"))[0]
         self.hash = model_hash(filename)
 
         self.sha256 = hashes.sha256_from_cache(self.filename, "checkpoint/" + name)
@@ -106,59 +106,57 @@ def list_models():
         checkpoint_info.register()
 
 
+def get_model_snapshots(model_name: str):
+    try:
+        from extensions.sd_dreambooth_extension.dreambooth.dataclasses.db_config import from_file
+    except:
+        from dreambooth.dreambooth.dataclasses.db_config import from_file  # noqa
+
+    result = None
+    try:
+        import gradio
+        result = gradio.update(visible=True)
+    except:
+        pass
+    if model_name == "" or model_name is None:
+        return result
+    config = from_file(model_name)
+    snaps_path = os.path.join(config.model_dir, "snapshots")
+    snaps = []
+    if os.path.exists(snaps_path):
+        for directory in os.listdir(snaps_path):
+            if "checkpoint_" in directory:
+                fullpath = os.path.join(snaps_path, directory)
+                snaps.append(fullpath)
+    return snaps
+
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
 def get_db_models():
-    rgx = re.compile(r"\[.*\]")
-    output = [""]
-    out_dir = shared.dreambooth_models_path
+    model_dir = shared.models_path
+    out_dir = os.path.join(model_dir, "dreambooth")
+    output = []
     if os.path.exists(out_dir):
-        for item in os.listdir(out_dir):
-            if os.path.isdir(os.path.join(out_dir, item)) and not rgx.search(item):
-                output.append(item)
+        dirs = os.listdir(out_dir)
+        for found in dirs:
+            if os.path.isdir(os.path.join(out_dir, found)):
+                output.append(found)
     return output
 
 
-def get_lora_models(config: DreamboothConfig = None):
+def get_lora_models():
+    model_dir = shared.lora_models_path
+    out_dir = model_dir
     output = [""]
-    if config is None:
-        config = shared.db_model_config
-    if config is not None:
-        lora_dir = os.path.join(config.model_dir, "loras")
-        if os.path.exists(lora_dir):
-            files = os.listdir(lora_dir)
-            for file in files:
-                if os.path.isfile(os.path.join(lora_dir, file)):
-                    if ".pt" in file and "_txt.pt" not in file:
-                        output.append(file)
+    if os.path.exists(out_dir):
+        dirs = os.listdir(out_dir)
+        for found in dirs:
+            if os.path.isfile(os.path.join(out_dir, found)):
+                if "_txt.pt" not in found and ".pt" in found:
+                    output.append(found)
     return output
-
-
-def get_sorted_lora_models(config: DreamboothConfig = None):
-    models = get_lora_models(config)
-
-    def get_iteration(name: str):
-        regex = re.compile(r'.*_(\d+)\.pt$')
-        match = regex.search(name)
-        return int(match.group(1)) if match else 0
-
-    return sorted(models, key=lambda x: get_iteration(x))
-
-
-def get_model_snapshots(config: DreamboothConfig = None):
-    snaps = [""]
-    if config is None:
-        config = shared.db_model_config
-    if config is not None:
-        snaps_dir = os.path.join(config.model_dir, "checkpoints")
-        if os.path.exists(snaps_dir):
-            for file in os.listdir(snaps_dir):
-                if os.path.isdir(os.path.join(snaps_dir, file)):
-                    rev_parts = file.split("-")
-                    if rev_parts[0] == "checkpoint" and len(rev_parts) == 2:
-                        snaps.append(rev_parts[1])
-    return snaps
 
 
 def unload_system_models():
@@ -233,20 +231,3 @@ def enable_safe_unpickle():
         auto_shared.cmd_opts.disable_safe_unpickle = False
     except:
         pass
-
-
-def xformerify(obj):
-    if is_xformers_available():
-        try:
-            obj.enable_xformers_memory_efficient_attention()
-        except ModuleNotFoundError:
-            print("xformers not found, using default attention")
-
-
-def torch2ify(unet):
-    if hasattr(torch, 'compile'):
-        try:
-            unet = torch.compile(unet, mode="max-autotune", fullgraph=False)
-        except:
-            pass
-    return unet

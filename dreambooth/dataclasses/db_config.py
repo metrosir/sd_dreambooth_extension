@@ -5,10 +5,14 @@ from typing import List, Dict
 
 from pydantic import BaseModel
 
-from dreambooth import shared  # noqa
-from dreambooth.dataclasses.db_concept import Concept  # noqa
-from dreambooth.utils.image_utils import get_scheduler_names  # noqa
-from dreambooth.utils.utils import list_attention
+from extensions.sd_dreambooth_extension.dreambooth.utils.image_utils import get_scheduler_names
+
+try:
+    from extensions.sd_dreambooth_extension.dreambooth import shared
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.db_concept import Concept
+except:
+    from dreambooth.dreambooth import shared  # noqa
+    from dreambooth.dreambooth.dataclasses.db_concept import Concept  # noqa
 
 # Keys to save, replacing our dumb __init__ method
 save_keys = []
@@ -22,19 +26,14 @@ def sanitize_name(name):
 
 
 class DreamboothConfig(BaseModel):
-    # These properties MUST be sorted alphabetically
     adamw_weight_decay: float = 0.01
-    adaptation_beta1: int = 0
-    adaptation_beta2: int = 0
-    adaptation_d0: float = 1e-8
-    adaptation_eps: float = 1e-8
     attention: str = "xformers"
     cache_latents: bool = True
     clip_skip: int = 1
     concepts_list: List[Dict] = []
     concepts_path: str = ""
     custom_model_name: str = ""
-    noise_scheduler: str = "DDPM"
+    deis_train_scheduler: bool = False
     deterministic: bool = False
     ema_predict: bool = False
     epoch: int = 0
@@ -74,7 +73,7 @@ class DreamboothConfig(BaseModel):
     model_path: str = ""
     num_train_epochs: int = 100
     offset_noise: float = 0
-    optimizer: str = "8bit AdamW"
+    optimizer: str = "8Bit Adam"
     pad_tokens: bool = True
     pretrained_model_name_or_path: str = ""
     pretrained_vae_name_or_path: str = ""
@@ -95,7 +94,6 @@ class DreamboothConfig(BaseModel):
     save_lora_after: bool = True
     save_lora_cancel: bool = False
     save_lora_during: bool = True
-    save_lora_for_extra_net: bool = True
     save_preview_every: int = 5
     save_safetensors: bool = True
     save_state_after: bool = False
@@ -119,14 +117,8 @@ class DreamboothConfig(BaseModel):
     use_subdir: bool = False
     v2: bool = False
 
-    def __init__(
-            self,
-            model_name: str = "",
-            v2: bool = False,
-            src: str = "",
-            resolution: int = 512,
-            **kwargs
-    ):
+    def __init__(self, model_name: str = "", v2: bool = False, src: str = "",
+                 resolution: int = 512, **kwargs):
 
         super().__init__(**kwargs)
         model_name = sanitize_name(model_name)
@@ -138,11 +130,8 @@ class DreamboothConfig(BaseModel):
         if len(shared.paths):
             models_path = os.path.join(shared.paths["models"], "dreambooth")
 
-        if not self.use_lora:
-            self.lora_model_name = ""
-
         model_dir = os.path.join(models_path, model_name)
-        # print(f"Model dir set to: {model_dir}")
+        print(f"Model dir set to: {model_dir}")
         working_dir = os.path.join(model_dir, "working")
 
         if not os.path.exists(working_dir):
@@ -177,6 +166,10 @@ class DreamboothConfig(BaseModel):
             if "db_" in key:
                 key = key.replace("db_", "")
             if key == "attention" and value == "flash_attention":
+                try:
+                    from extensions.sd_dreambooth_extension.dreambooth.utils.utils import list_attention
+                except:
+                    from dreambooth.dreambooth.utils.utils import list_attention  # noqa
                 value = list_attention()[-1]
                 print(f"Replacing flash attention in config to {value}")
 
@@ -191,51 +184,9 @@ class DreamboothConfig(BaseModel):
                             break
 
             if hasattr(self, key):
-                key, value = self.validate_param(key, value)
                 setattr(self, key, value)
         if sched_swap:
             self.save()
-
-    @staticmethod
-    def validate_param(key, value):
-        replaced_params = {
-            # "old_key" : {
-            #   "new_key": "...",
-            #   "values": [{
-            #       "old": ["...", "..."]
-            #       "new": "..."
-            #   }]
-            # }
-            "deis_train_scheduler": {
-                "new_key": "noise_scheduler",
-                "values": [{
-                    "old": [True],
-                    "new": "DDPM"
-                }],
-            },
-            "optimizer": {
-                "values": [{
-                    "old": ["8Bit Adam"],
-                    "new": "8bit AdamW"
-                }],
-            },
-            "save_safetensors": {
-                "values": [{
-                    "old": [False],
-                    "new": True
-                }],
-            }
-        }
-
-        if key in replaced_params.keys():
-            replacement = replaced_params[key]
-            if hasattr(replacement, "new_key"):
-                key = replacement["new_key"]
-            if hasattr(replacement, "values"):
-                for _value in replacement["values"]:
-                    if value in _value["old"]:
-                        value = _value["new"]
-        return key, value
 
     # Pass a dict and return a list of Concept objects
     def concepts(self, required: int = -1):
@@ -266,19 +217,13 @@ class DreamboothConfig(BaseModel):
 
     # Set default values
     def check_defaults(self):
-        if self.model_name:
+        if self.model_name is not None and self.model_name != "":
             if self.revision == "" or self.revision is None:
                 self.revision = 0
             if self.epoch == "" or self.epoch is None:
                 self.epoch = 0
             self.model_name = "".join(x for x in self.model_name if (x.isalnum() or x in "._- "))
             models_path = shared.dreambooth_models_path
-            try:
-                from core.handlers.models import ModelHandler
-                mh = ModelHandler()
-                models_path = mh.models_path
-            except:
-                pass
             if models_path == "" or models_path is None:
                 models_path = os.path.join(shared.models_path, "dreambooth")
             model_dir = os.path.join(models_path, self.model_name)
@@ -338,6 +283,9 @@ def save_config(*args):
     if model_name is None or model_name == "":
         print("Invalid model name.")
         return
+    config = from_file(model_name)
+    if config is None:
+        config = DreamboothConfig(model_name)
     params_dict = dict(zip(save_keys, params))
     concepts_list = []
     # If using a concepts file/string, keep concepts_list empty.
@@ -357,9 +305,6 @@ def save_config(*args):
         if len(concepts_list) and not len(existing_concepts):
             params_dict["concepts_list"] = concepts_list
 
-    config = from_file(model_name)
-    if config is None:
-        config = DreamboothConfig(model_name)
     config.load_params(params_dict)
     shared.db_model_config = config
     config.save()
@@ -374,9 +319,6 @@ def from_file(model_name):
     Returns: Dict | None
 
     """
-    if isinstance(model_name, list) and len(model_name) > 0:
-        model_name = model_name[0]
-        
     if model_name == "" or model_name is None:
         return None
 

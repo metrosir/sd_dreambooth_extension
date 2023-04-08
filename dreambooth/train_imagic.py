@@ -13,10 +13,16 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
-from dreambooth import shared
-from dreambooth.dataclasses.db_config import DreamboothConfig
-from dreambooth.shared import status
-from dreambooth.utils.image_utils import list_features, is_image
+try:
+    from extensions.sd_dreambooth_extension.dreambooth import shared
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.db_config import DreamboothConfig
+    from extensions.sd_dreambooth_extension.dreambooth.shared import status
+    from extensions.sd_dreambooth_extension.dreambooth.utils.image_utils import list_features, is_image
+except:
+    from dreambooth.dreambooth import shared  # noqa
+    from dreambooth.dreambooth.dataclasses.db_config import DreamboothConfig  # noqa
+    from dreambooth.dreambooth.shared import status  # noqa
+    from dreambooth.dreambooth.utils.image_utils import list_features, is_image  # noqa
 
 logger = get_logger(__name__)
 
@@ -179,11 +185,11 @@ def train_imagic(args: DreamboothConfig):
 
     # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
     optimizer_class = torch.optim.Adam
-    if args.optimizer == "8bit AdamW":
+    if args.optimizer == "8Bit Adam":
         try:
             import bitsandbytes as bnb
             optimizer_class = bnb.optim.Adam8bit
-        except:
+        except ImportError:
             raise ImportError(
                 "To use 8-bit Adam, please install the bitsandbytes library: `pip install bitsandbytes`."
             )

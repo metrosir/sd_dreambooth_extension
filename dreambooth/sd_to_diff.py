@@ -24,23 +24,33 @@ import huggingface_hub.utils.tqdm
 import importlib_metadata
 import safetensors.torch
 import torch
+from diffusers.pipelines.paint_by_example import PaintByExampleImageEncoder
+from huggingface_hub import HfApi, hf_hub_download
+from omegaconf import OmegaConf
+
+from extensions.sd_dreambooth_extension.dreambooth.utils.image_utils import get_scheduler_class
+
+try:
+    from extensions.sd_dreambooth_extension.dreambooth import shared
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.db_config import DreamboothConfig
+    from extensions.sd_dreambooth_extension.dreambooth.utils.model_utils import get_db_models, disable_safe_unpickle, \
+        enable_safe_unpickle
+    from extensions.sd_dreambooth_extension.dreambooth.utils.utils import printi
+    from extensions.sd_dreambooth_extension.helpers.mytqdm import mytqdm
+except:
+    from dreambooth.dreambooth import shared  # noqa
+    from dreambooth.dreambooth.dataclasses.db_config import DreamboothConfig  # noqa
+    from dreambooth.dreambooth.utils.model_utils import get_db_models, disable_safe_unpickle, enable_safe_unpickle  # noqa
+    from dreambooth.dreambooth.utils.utils import printi  # noqa
+    from dreambooth.helpers.mytqdm import mytqdm  # noqa
+
 from diffusers import (
     AutoencoderKL,
     DDIMScheduler,
     UNet2DConditionModel)
-from diffusers.pipelines.latent_diffusion.pipeline_latent_diffusion import LDMBertConfig, LDMBertModel
-from diffusers.pipelines.paint_by_example import PaintByExampleImageEncoder
-from huggingface_hub import HfApi, hf_hub_download
-from omegaconf import OmegaConf
-from transformers import BertTokenizerFast, CLIPTextModel, CLIPTokenizer, CLIPVisionConfig
 
-from dreambooth import shared
-from dreambooth.dataclasses.db_config import DreamboothConfig
-from dreambooth.utils.image_utils import get_scheduler_class
-from dreambooth.utils.model_utils import get_db_models, disable_safe_unpickle, \
-    enable_safe_unpickle
-from dreambooth.utils.utils import printi
-from helpers.mytqdm import mytqdm
+from diffusers.pipelines.latent_diffusion.pipeline_latent_diffusion import LDMBertConfig, LDMBertModel
+from transformers import BertTokenizerFast, CLIPTextModel, CLIPTokenizer, CLIPVisionConfig
 
 
 def shave_segments(path, n_shave_prefix_segments=1):
@@ -290,37 +300,31 @@ def create_ldm_bert_config(original_config):
     return config
 
 
-def convert_ldm_unet_checkpoint(checkpoint, config, path=None, extract_ema=False):
+def convert_ldm_unet_checkpoint(checkpoint, config, path=None):
     """
     Takes a state dict and a config, and returns a converted checkpoint.
-
-    If you are extracting an emaonly model, it'll doesn't really know it's an EMA unet, because they just stuck the EMA weights into the unet. BUT, if you have both the nonema and -ema files in the same directory and you select "nonema", or if you have the 1.5 model with both weights, then you'll get both unets.
-    So the regular 1-5-pruned model should get you both.
     """
 
     # extract state_dict for UNet
+    unet_state_dict = {}
     ema_state_dict = {}
     keys = list(checkpoint.keys())
     has_ema = False
     unet_key = "model.diffusion_model."
-
     # at least a 100 parameters have to start with `model_ema` in order for the checkpoint to be EMA
-    if extract_ema and sum(k.startswith("model_ema") for k in keys) > 100:
+    if sum(k.startswith("model_ema") for k in keys) > 100:
         print(f"Checkpoint {path} has both EMA and non-EMA weights.")
         has_ema = True
         for key in keys:
             if key.startswith("model.diffusion_model"):
                 flat_ema_key = "model_ema." + "".join(key.split(".")[1:])
-                if flat_ema_key not in checkpoint:
-                    flat_ema_key = flat_ema_key.replace("diffusion_model", "")
                 ema_state_dict[key.replace(unet_key, "")] = checkpoint.pop(flat_ema_key)
-
     ema_checkpoint = None
-    unet_state_dict = {}
-
     for key in keys:
         if key.startswith(unet_key):
             unet_state_dict[key.replace(unet_key, "")] = checkpoint.pop(key)
+            if has_ema:
+                ema_state_dict[key.replace(unet_key, "")] = unet_state_dict[key.replace(unet_key, "")]
 
     if has_ema:
         ema_checkpoint = unet_dict_to_checkpoint(ema_state_dict, config)
@@ -775,7 +779,7 @@ def replace_symlinks(path, base):
         # Get the target of the symlink
         src = os.readlink(path)
         blob = os.path.basename(src)
-        path_parts = path.split(os.sep)
+        path_parts = path.split("/") if "/" in path else path.split("\\")
         model_name = None
         dir_name = None
         save_next = False
@@ -844,7 +848,7 @@ def download_model(db_config: DreamboothConfig, token, extract_ema: bool = False
             print(f'Found model index: {name}')
             model_index = local_name
             continue
-        if (".ckpt" in name or ".safetensors" in name) and os.sep not in name:
+        if (".ckpt" in name or ".safetensors" in name) and not "/" in name:
             print(f'Found model: {name}')
             model_files.append(local_name)
             continue
@@ -907,7 +911,7 @@ def download_model(db_config: DreamboothConfig, token, extract_ema: bool = False
 
     huggingface_hub.utils.tqdm.tqdm = mytqdm
     out_model = None
-    for repo_file in mytqdm(files_to_fetch, desc=f"Fetching {len(files_to_fetch)} files", position=1):
+    for repo_file in mytqdm(files_to_fetch, desc=f"Fetching {len(files_to_fetch)} files"):
         if not os.path.exists(repo_file):
             out = hf_hub_download(
                 hub_url,
@@ -1000,10 +1004,7 @@ def load_checkpoint(checkpoint_file: str, map_location: str):
     else:
         disable_safe_unpickle()
         print("Loading ckpt...")
-        try:
-            checkpoint = torch.load(checkpoint_file, map_location=('cpu' if map_location == 'mps' else map_location))
-        except:
-            checkpoint = torch.load(checkpoint_file, map_location=map_location)
+        checkpoint = torch.load(checkpoint_file, map_location=map_location)
         checkpoint = checkpoint["state_dict"] if "state_dict" in checkpoint else checkpoint
         enable_safe_unpickle()
     return checkpoint
@@ -1035,8 +1036,6 @@ def extract_checkpoint(new_model_name: str, checkpoint_file: str, from_hub=False
 
         status
     """
-    from dreambooth.ui_functions import gr_update
-
     has_ema = False
     v2 = False
     revision = 0
@@ -1145,7 +1144,10 @@ def extract_checkpoint(new_model_name: str, checkpoint_file: str, from_hub=False
         if from_hub:
             result_status = "Model fetched from hub."
             db_config.save()
-
+            try:
+                from extensions.sd_dreambooth_extension.dreambooth.ui_functions import gr_update
+            except:
+                from dreambooth.dreambooth.ui_functions import gr_update  # noqa
             return gr_update(choices=sorted(get_db_models()), value=new_model_name), \
                 db_config.model_dir, \
                 revision, \
@@ -1202,7 +1204,7 @@ def extract_checkpoint(new_model_name: str, checkpoint_file: str, from_hub=False
         unet = UNet2DConditionModel(**unet_config)
 
         converted_unet_checkpoint, converted_ema_checkpoint = convert_ldm_unet_checkpoint(
-            checkpoint, unet_config, path=checkpoint_file, extract_ema=extract_ema
+            checkpoint, unet_config, path=checkpoint_file
         )
         unet.load_state_dict(converted_unet_checkpoint)
         unet.save_pretrained(os.path.join(db_config.pretrained_model_name_or_path, "unet"), safe_serialization=True)
@@ -1210,7 +1212,6 @@ def extract_checkpoint(new_model_name: str, checkpoint_file: str, from_hub=False
 
         if converted_ema_checkpoint is not None:
             print("Saving EMA unet.")
-            has_ema = True
             ema_unet = UNet2DConditionModel(**unet_config)
             ema_unet.load_state_dict(converted_ema_checkpoint)
             ema_unet.save_pretrained(os.path.join(db_config.pretrained_model_name_or_path, "ema_unet"),
@@ -1334,6 +1335,11 @@ def extract_checkpoint(new_model_name: str, checkpoint_file: str, from_hub=False
 
     enable_safe_unpickle()
     printi(result_status)
+
+    try:
+        from extensions.sd_dreambooth_extension.dreambooth.ui_functions import gr_update
+    except:
+        from dreambooth.dreambooth.ui_functions import gr_update  # noqa
 
     return gr_update(choices=sorted(get_db_models()), value=new_model_name), \
         model_dir, \

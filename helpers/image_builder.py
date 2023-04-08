@@ -1,38 +1,48 @@
 import os
 import random
 import traceback
-from typing import List, Union
+from typing import List
 
 import torch
 from PIL import Image
 from accelerate import Accelerator
 from diffusers import DiffusionPipeline, AutoencoderKL, UNet2DConditionModel
 
-from dreambooth import shared
-from dreambooth.dataclasses.db_config import DreamboothConfig
-from dreambooth.dataclasses.prompt_data import PromptData
-from dreambooth.shared import disable_safe_unpickle
-from dreambooth.utils import image_utils
-from dreambooth.utils.image_utils import process_txt2img, get_scheduler_class
-from dreambooth.utils.model_utils import get_checkpoint_match, \
-    reload_system_models, \
-    enable_safe_unpickle, disable_safe_unpickle, unload_system_models, xformerify
-from helpers.mytqdm import mytqdm
-from lora_diffusion.lora import _text_lora_path_ui, patch_pipe, tune_lora_scale, \
-    get_target_module
+try:
+    from extensions.sd_dreambooth_extension.dreambooth import shared
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.db_config import DreamboothConfig
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.prompt_data import PromptData
+    from extensions.sd_dreambooth_extension.dreambooth.shared import disable_safe_unpickle
+    from extensions.sd_dreambooth_extension.dreambooth.utils import image_utils
+    from extensions.sd_dreambooth_extension.dreambooth.utils.image_utils import process_txt2img, get_scheduler_class
+    from extensions.sd_dreambooth_extension.dreambooth.utils.model_utils import get_checkpoint_match, \
+        reload_system_models, \
+        enable_safe_unpickle, disable_safe_unpickle, unload_system_models
+    from extensions.sd_dreambooth_extension.helpers.mytqdm import mytqdm
+    from extensions.sd_dreambooth_extension.lora_diffusion.lora import _text_lora_path_ui, patch_pipe, tune_lora_scale, \
+        get_target_module
+except:
+    from dreambooth.dreambooth import shared  # noqa
+    from dreambooth.dreambooth.dataclasses.db_config import DreamboothConfig  # noqa
+    from dreambooth.dreambooth.dataclasses.prompt_data import PromptData  # noqa
+    from dreambooth.dreambooth.shared import disable_safe_unpickle  # noqa
+    from dreambooth.dreambooth.utils import image_utils  # noqa
+    from dreambooth.dreambooth.utils.image_utils import process_txt2img, get_scheduler_class  # noqa
+    from dreambooth.dreambooth.utils.model_utils import get_checkpoint_match, reload_system_models, enable_safe_unpickle, disable_safe_unpickle, unload_system_models  # noqa
+    from dreambooth.helpers.mytqdm import mytqdm  # noqa
+    from dreambooth.lora_diffusion.lora import _text_lora_path_ui, patch_pipe, tune_lora_scale, get_target_module  # noqa
 
 
 class ImageBuilder:
     def __init__(
             self, config: DreamboothConfig,
-            class_gen_method: str = "Native Diffusers",
+            use_txt2img: bool,
             lora_model: str = None,
             batch_size: int = 1,
             accelerator: Accelerator = None,
             source_checkpoint: str = None,
             lora_unet_rank: int = 4,
-            lora_txt_rank: int = 4,
-            scheduler: Union[str, None] = None
+            lora_txt_rank: int = 4
     ):
         self.image_pipe = None
         self.txt_pipe = None
@@ -40,7 +50,6 @@ class ImageBuilder:
         self.last_model = None
         self.batch_size = batch_size
         self.exception_count = 0
-        use_txt2img = class_gen_method == "A1111 txt2img (Euler a)"
 
         if not image_utils.txt2img_available and use_txt2img:
             print("No txt2img available.")
@@ -89,27 +98,21 @@ class ImageBuilder:
                     revision=config.revision,
                     torch_dtype=torch_dtype
                 ),
-                unet=UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch_dtype),
+                unet=UNet2DConditionModel.from_pretrained(unet_path),
                 torch_dtype=torch_dtype,
                 requires_safety_checker=False,
                 safety_checker=None,
                 revision=config.revision
             )
             self.image_pipe.enable_attention_slicing()
-
-            xformerify(self.image_pipe)
-
+            self.image_pipe.set_use_memory_efficient_attention_xformers(True)
             self.image_pipe.progress_bar = self.progress_bar
-
-            if scheduler is None:
-                scheduler = config.scheduler
-
-            print(f"Using scheduler: {scheduler}")
-            scheduler_class = get_scheduler_class(scheduler)
-
+            print(f"Using scheduler: {config.scheduler}")
+            scheduler_class = get_scheduler_class(config.scheduler)
+            print(f"Got scheduler: {scheduler_class}")
             self.image_pipe.scheduler = scheduler_class.from_config(self.image_pipe.scheduler.config)
 
-            if "UniPC" in scheduler:
+            if "UniPC" in config.scheduler:
                 self.image_pipe.scheduler.config.solver_type = "bh2"
 
             self.image_pipe.to(accelerator.device)
@@ -120,22 +123,21 @@ class ImageBuilder:
                 accelerator.load_state(new_hotness)
                 enable_safe_unpickle()
 
-            if config.use_lora and lora_model:
-                lora_model_path = shared.ui_lora_models_path
-                if os.path.exists(lora_model_path):
-                    patch_pipe(
-                        pipe=self.image_pipe,
-                        maybe_unet_path=lora_model_path,
-                        unet_target_replace_module=get_target_module("module", config.use_lora_extended),
-                        token=None,
-                        r=lora_unet_rank,
-                        r_txt=lora_txt_rank
-                    )
-                    tune_lora_scale(self.image_pipe.unet, config.lora_weight)
+            lora_model_path = os.path.join(shared.models_path, "lora", lora_model)
+            if config.use_lora and os.path.exists(lora_model_path) and lora_model != "":
+                patch_pipe(
+                    pipe=self.image_pipe,
+                    maybe_unet_path=lora_model_path,
+                    unet_target_replace_module=get_target_module("module", config.use_lora_extended),
+                    token=None,
+                    r=lora_unet_rank,
+                    r_txt=lora_txt_rank
+                )
+                tune_lora_scale(self.image_pipe.unet, config.lora_weight)
 
-                    lora_txt_path = _text_lora_path_ui(lora_model_path)
-                    if os.path.exists(lora_txt_path):
-                        tune_lora_scale(self.image_pipe.text_encoder, config.lora_txt_weight)
+                lora_txt_path = _text_lora_path_ui(lora_model_path)
+                if os.path.exists(lora_txt_path):
+                    tune_lora_scale(self.image_pipe.text_encoder, config.lora_txt_weight)
 
         else:
             try:
@@ -161,9 +163,9 @@ class ImageBuilder:
             )
 
         if iterable is not None:
-            return mytqdm(iterable, **self._progress_bar_config, position=0)
+            return mytqdm(iterable, **self._progress_bar_config)
         elif total is not None:
-            return mytqdm(total=total, **self._progress_bar_config, position=0)
+            return mytqdm(total=total, **self._progress_bar_config)
         else:
             raise ValueError("Either `total` or `iterable` has to be defined.")
 
@@ -190,7 +192,7 @@ class ImageBuilder:
                 from modules import shared as auto_shared
 
                 p = StableDiffusionProcessingTxt2Img(
-                    sampler_name='Euler a',
+                    sampler_name='DPM++ 2S a Karras',
                     sd_model=auto_shared.sd_model,
                     prompt=positive_prompts,
                     negative_prompt=negative_prompts,
@@ -217,8 +219,7 @@ class ImageBuilder:
         else:
             with self.accelerator.autocast(), torch.inference_mode():
                 if seed is None or seed == '' or seed == -1:
-                    seed = int(random.randrange(0, 21474836147))
-
+                    seed = int(random.randrange(21474836147))
                 generator = torch.manual_seed(seed)
                 try:
                     output = self.image_pipe(

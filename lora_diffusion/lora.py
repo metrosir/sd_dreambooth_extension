@@ -8,7 +8,11 @@ from safetensors.torch import safe_open
 from safetensors.torch import save_file as safe_save
 from torch import dtype
 
-from dreambooth.utils.model_utils import disable_safe_unpickle, enable_safe_unpickle
+try:
+    from extensions.sd_dreambooth_extension.dreambooth.utils.model_utils import disable_safe_unpickle, \
+        enable_safe_unpickle
+except:
+    from dreambooth.dreambooth.utils.model_utils import disable_safe_unpickle, enable_safe_unpickle  # noqa
 
 
 class LoraInjectedLinear(nn.Module):
@@ -353,7 +357,7 @@ def save_lora_weight(
         path="./lora.pt",
         target_replace_module=None,
         save_safetensors: bool = False,
-        d_type: dtype = torch.float32
+        d_type: dtype = torch.float16
 ):
     if target_replace_module is None:
         target_replace_module = DEFAULT_TARGET_REPLACE

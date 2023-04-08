@@ -3,10 +3,15 @@ import random
 
 from PIL import Image
 
-from dreambooth.dataclasses.db_config import DreamboothConfig
-from dreambooth.dataclasses.prompt_data import PromptData
-from dreambooth.utils.image_utils import get_images, FilenameTextGetter, \
-    closest_resolution, make_bucket_resolutions
+try:
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.db_config import DreamboothConfig
+    from extensions.sd_dreambooth_extension.dreambooth.dataclasses.prompt_data import PromptData
+    from extensions.sd_dreambooth_extension.dreambooth.utils.image_utils import get_images, FilenameTextGetter, \
+        closest_resolution, make_bucket_resolutions
+except:
+    from dreambooth.dreambooth.dataclasses.db_config import DreamboothConfig  # noqa
+    from dreambooth.dreambooth.dataclasses.prompt_data import PromptData  # noqa
+    from dreambooth.dreambooth.utils.image_utils import get_images, FilenameTextGetter, closest_resolution, make_bucket_resolutions  # noqa
 
 
 class SampleDataset:
@@ -31,17 +36,26 @@ class SampleDataset:
             seed = concept.sample_seed
             neg = concept.save_sample_negative_prompt
             # If no sample file, look for filewords
-            if sample_file and os.path.exists(sample_file):
+            if sample_file != "" and sample_file is not None and os.path.exists(sample_file):
                 with open(sample_file, "r") as samples:
                     lines = samples.readlines()
-                    prompts = [(line, (config.resolution, config.resolution)) for line in lines if line.strip()]
+                    prompts = [(line, (config.resolution, config.resolution)) for line in lines if line.strip() != ""]
             elif "[filewords]" in sample_prompt:
                 prompts = []
                 images = get_images(concept.instance_data_dir)
                 getter = FilenameTextGetter(shuffle_tags)
                 for image in images:
-                    file_text = getter.read_text(image)
-                    prompt = getter.create_text(sample_prompt, file_text, concept, False)
+                    base = getter.read_text(image)
+                    prompt = getter.create_text(
+                        sample_prompt,
+                        base,
+                        concept.instance_token,
+                        concept.class_token,
+                        False
+                    )
+                    if prompt == "[filewords]":
+                        print(f"Invalid prompt generation: {image}/{base}")
+                        continue
                     img = Image.open(image)
                     res = img.size
                     closest = closest_resolution(res[0], res[1], bucket_resos)
